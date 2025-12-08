@@ -1,0 +1,15 @@
+# AI Book Factory - Dependencies
+
+# Core
+aiohttp>=3.9.0
+asyncio-atexit>=1.0.0
+
+# Document formatting
+python-docx>=1.0.0
+
+# Optional: EPUB generation
+# ebooklib>=0.18
+
+# Optional: PDF generation  
+# reportlab>=4.0.0
+# weasyprint>=60.0

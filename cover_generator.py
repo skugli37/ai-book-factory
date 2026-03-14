@@ -7,7 +7,6 @@ import os
 import io
 
 import config
-from config import HF_TOKEN  # pyre-ignore[21]
 from huggingface_hub import InferenceClient  # pyre-ignore[21]
 
 class CoverGenerator:

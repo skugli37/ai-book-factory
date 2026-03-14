@@ -1,47 +1,61 @@
-# AI Book Factory 📚 - Production RUNBOOK
+# AI Book Factory 📚 - Production RUNBOOK (Premium)
 
-This runbook provides troubleshooting steps and operational guidelines for running the backend batch-generation infrastructure.
+This runbook provides troubleshooting steps and operational guidelines for the Premium Automated Publishing infrastructure.
 
-## Environment Setup
-Ensure you are using Python 3.11+. The system requires `aiohttp`, `python-docx`, and other dependencies explicitly pinned in `requirements.txt`.
+---
 
-**Mandatory Environmental Variable:**
+## 🛠️ Environment & Configuration
+Ensure you are using **Python 3.12+** to support `asyncio.to_thread` and modern async-IO operations.
+
+**Mandatory Environmental Variables:**
 ```bash
 export GROQ_API_KEY="your_groq_api_key"
+export HF_TOKEN="your_huggingface_token" # Required for Premium LLMs & Elite Covers
 ```
 
-## System Execution Commands
+**Config Settings (`config.py`):**
+- `LLM_PROVIDER`: Set to `"huggingface"` for Qwen2.5/Llama-3.1 quality.
+- `IMAGE_MODEL`: Set to `"black-forest-labs/FLUX.1-dev"` for elite covers.
 
-**Single Iterative Book Generation**
-Executes end-to-end for one random niche category.
+---
+
+## 🚀 Execution Guide
+
+### 1. Premium Web Dashboard (Recommended)
+The primary way to manage generations visually:
 ```bash
-python book_factory.py
+cd web/backend && python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
+- Access at: `http://localhost:8000`
+- Monitor real-time logs via the WebSocket bridge.
 
-**Batch Generator & SQLite Queue**
-Pulls pending metadata templates from internal database and executes within rate limits.
+### 2. CLI Batch Processing
+For massive background generation tasks:
 ```bash
 python batch_generator.py
 ```
 
-## Known Issues and Troubleshooting
+---
 
-### 1. Rate Limit Exhaustion (Groq 429 Errors)
-**Symptom:** Terminal output loops `⚠️ Rate limited. Retrying in Xs...` 
-**Cause:** The 20 RPM Free Tier limits have been breached or IP flagged.
-**Resolution:** 
-- `AIWriter` has a built-in locking mechanism that throttles generation requests to ~19 RPM (once every 3.1 seconds). 
-- If errors persist, pause the execution via `CTRL+C`. Pending batch generations are persisted in `batch_queue.db`. You can restart `python batch_generator.py` after an hour safely without losing full progress.
+## 🔍 Troubleshooting
 
-### 2. Formatting Errors: `ValueError: <Style 'Heading 1'> not found`
-**Symptom:** `kdp_formatter.py` fails during compilation.
-**Cause:** Installed `python-docx` template has deviated. 
-**Resolution:** Ensure your environment is clean and default. You can bypass this by editing the fallback in `kdp_formatter.py` to use generic string assignments rather than `<Style>` injection.
+### 1. "Tier 1" Visual Failure (FLUX.1-dev)
+**Symptom:** Logs show `⚠️ [TIER 1] Failed or timed out`.
+**Cause:** Hugging Face Inference API is at capacity or model is loading.
+**Resolution:** This is handled **automatically**. The system will fallback to Tier 2 (`FLUX.1-schnell`). No manual intervention required.
 
-### 3. Missing `python-docx` Module Memory Errors
-**Symptom:** Document instantiation hangs.
-**Cause:** Not running in 64-bit Python 3.11+ for incredibly large books.
-**Resolution:** Ensure that your generated books top-out around ~80,000 words maximum for this Python pipeline footprint to be stable locally. 
+### 2. Multi-Pass Text Gaps
+**Symptom:** Chapter text contains "..." or stops abruptly.
+**Cause:** LLM reached `max_tokens` before finishing logic.
+**Resolution:** The `AIWriter.generate_long()` logic should detect this and perform a continuation burst. If it fails, check if your `HF_TOKEN` has the necessary permissions for larger models.
 
-## KDP Formatting Spec Verification
-Before deploying to Amazon, double-check that your Word application renders the docx exactly 6"x9" with the mirrored/left-aligned margins defined in `formatter._calculate_gutter()`. This algorithm calculates precisely to the Amazon Trim specification standards.
+### 3. Pyre/Lint Diagnostics
+**Symptom:** Static analysis reports `Expected a callable`, `Cannot index into str`, etc.
+**Cause:** Type refinement issues in async callbacks or regex results.
+**Resolution:** These have been largely resolved in `v2.4.0`. Ensure you are using the latest `writer.py` and `book_factory.py` from the `main` branch.
+
+---
+
+## 📦 KDP Verification Spec
+Every book folder contains a `kdp_checklist.txt`. **Do not skip this.** 
+Verify that the `book_kdp.docx` mirrors the 6"x9" trim size accurately in your Word processor before final upload. The gutter calculation in `kdp_formatter.py` is exact to Amazon's specifications.

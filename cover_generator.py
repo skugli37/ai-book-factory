@@ -19,7 +19,7 @@ class CoverGenerator:
     async def generate(title: str, genre: str, output_path: Path) -> Path:
         """Generates an extreme-quality cover image using Hugging Face Inference API."""
         
-        token = os.getenv("HF_TOKEN", HF_TOKEN)
+        token = os.getenv("HF_TOKEN", config.HF_TOKEN)
         
         if not token:
             print("   ⚠️ No HF_TOKEN found. Using premium local render.")

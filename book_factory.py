@@ -41,7 +41,7 @@ class BookFactory:
             # Report rate limit to UI heartbeat
             await self.report_progress("writing", percent=-1, text=msg)
 
-        self.writer = AIWriter(api_key, on_rate_limit=on_rate_limit)
+        self.writer = AIWriter(api_key, hf_token=HF_TOKEN, on_rate_limit=on_rate_limit)
         self.output_dir = Path(OUTPUT_DIR)
         self.output_dir.mkdir(exist_ok=True)
         # Initialize Research Orchestrator (handles DDG + Groq)
@@ -81,7 +81,7 @@ Rules:
 Example format: "Main Title: Compelling Subtitle Here"
 """
         title = await self.writer.generate(prompt, max_tokens=100)
-        title = title.strip().strip('"*\n')
+        title = self.clean_ai_title(title)
 
         desc_prompt = f"""Write a compelling Amazon book description for: "{title}"
 Genre: {niche['genre']}
@@ -140,12 +140,22 @@ Example:
         for line in response.strip().split("\n"):
             line = line.strip()
             if line and line[0].isdigit():
-                title = re.sub(r'^\d+[\.\)]\s*', '', line).strip("*")
+                title = re.sub(r'^\d+[\.\)]\s*', '', line).strip()
+                title = self.clean_ai_title(title)
                 if title:
                     chapters.append(title)
 
         limit = int(config.chapters)
         return chapters[0:limit]  # pyre-ignore[6]
+
+    def clean_ai_title(self, text: str) -> str:
+        """Strips common AI boilerplate and markdown from titles."""
+        # Remove common "Here is your title:" intros
+        text = re.sub(r'^(here is|your|catchy)?\s*(book|chapter)?\s*title:\s*', '', text, flags=re.IGNORECASE)
+        # Remove quotes, asterisks, and newlines
+        text = text.strip().strip('"*#\n ')
+        # Capitalize properly
+        return text
 
     async def generate_chapter(self, config: BookConfig, chapter_num: int, 
                               chapter_title: str, outline: List[str],
@@ -193,7 +203,7 @@ Top Sources to cite/integrate: {", ".join(r.url for r in research.results[:3])}
 
 TECHNICAL REQUIREMENTS:
 - TONE: {config.tone}, highly authoritative and premium.
-- LENGTH: Expand until you reach roughly {words_per_chapter} words. 
+- TARGET LENGTH: Aim for {words_per_chapter} words. Expand your arguments with examples.
 - FORMAT: Raw narrative text. NO summaries, NO bullet points (unless part of a listicle section), NO intros.
 - NO REPETITION: Ensure every paragraph brings a NEW insight or evidence piece.
 
@@ -201,7 +211,8 @@ STRETCH THE DEPTH: If you feel you are finishing too early, find a specific sub-
 
 BEGIN CHAPTER {chapter_num} IMMEDIATELY:
 """
-        content = await self.writer.generate(prompt, system=system_prompt, max_tokens=4000)
+        # Switching to generate_long to prevent cut-offs
+        content = await self.writer.generate_long(prompt, system=system_prompt, temperature=0.8)
         
         # Step 2: Proofread and refine the content
         content = await self.proofreader.refined_proofread(chapter_title, content)
@@ -270,7 +281,9 @@ BEGIN CHAPTER {chapter_num} IMMEDIATELY:
         # Sanitize title for filesystem (strip newlines, replace spaces with underscores, limit length)
         clean_title = str(current_config.title).replace('\n', ' ').strip()
         safe_title = re.sub(r'[^\w\s-]', '', clean_title)
-        safe_title = str(re.sub(r'\s+', '_', safe_title))[:50].strip('_')
+        safe_title = re.sub(r'\s+', '_', safe_title)
+        # Use explicit slicing that Pyre likes
+        safe_title = safe_title[0:50].strip('_')
         
         book_dir = self.output_dir / safe_title
         book_dir.mkdir(exist_ok=True, parents=True)

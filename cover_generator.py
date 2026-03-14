@@ -6,74 +6,112 @@ import textwrap
 import os
 import io
 
+import config
 from config import HF_TOKEN  # pyre-ignore[21]
 from huggingface_hub import InferenceClient  # pyre-ignore[21]
 
 class CoverGenerator:
     """Generates book covers using Hugging Face Inference API with a professional local fallback."""
 
-    # Fast and high-quality model for book covers
-    # 'black-forest-labs/FLUX.1-schnell' is excellent for detail
-    # 'stabilityai/stable-diffusion-xl-base-1.0' is a reliable alternative
-    # Stable Diffusion XL is often better at following 'No Text' and '2D Flat' instructions
-    DEFAULT_MODEL = "stabilityai/stable-diffusion-xl-base-1.0"
+    # Upgrade to FLUX.1-dev for "serious" professional quality
+    DEFAULT_MODEL = getattr(config, "IMAGE_MODEL", "black-forest-labs/FLUX.1-dev")
 
     @staticmethod
     async def generate(title: str, genre: str, output_path: Path) -> Path:
-        """Generates a high-quality cover image using Hugging Face Inference API."""
+        """Generates an extreme-quality cover image using Hugging Face Inference API."""
         
         token = os.getenv("HF_TOKEN", HF_TOKEN)
         
         if not token:
-            print("   ⚠️ No HF_TOKEN found in environment or config. Using premium local render.")
+            print("   ⚠️ No HF_TOKEN found. Using premium local render.")
             return CoverGenerator._generate_local_fallback(title, genre, output_path)
 
-        # Genre-specific style mapped to prompt templates
-        style_map = {
-            "self-help": "Conceptual photography, high-end minimalist design, aspirational mood, soft morning light, symbolic professional object, premium typography layout, clean white space, 8k",
-            "romance": "Ethereal painterly style, elegant composition, sweeping emotional lighting, bokeh effect, soft textures, sophisticated color palette, cinematic romance",
-            "mystery": "Low-key lighting, dramatic silhouettes, atmospheric fog, noir aesthetic, high contrast, sharp details, mysterious enigmatic visual metaphor, cinematic thriller",
-            "business": "Architectural abstraction, glass and steel textures, geometric precision, corporate high-end aesthetic, royal blue and silver palette, authoritative and modern, 8k",
-            "sci-fi": "Cyberpunk or space-opera aesthetic, hyper-detailed technology, glowing neon accents, vast scale, futuristic world-building, digital art masterpiece",
-            "fantasy": "Mythic illustration, magical realism, epic landscape, glowing particles, rich textures, storybook high-fantasy art style, cinematic adventure",
-            "non-fiction": "Deeply evocative photo-journalistic style or minimalist graphic design, stark lighting, powerful symbolic object, editorial quality, authoritative and sober, high-end magazine aesthetic"
+        # Extreme Quality Visual Archetypes
+        archetypes = {
+            "business": {
+                "direction": "Serious Executive Minimalist. Highly structured architectural abstraction.",
+                "details": "Brutalism style, sharp geometric shapes, glass and steel textures. Deep navy and matte silver colors. Low-angle perspective, massive scale.",
+                "mood": "Authoritative, stable, ultra-modern, elite, corporate excellence."
+            },
+            "self-help": {
+                "direction": "Ethereal Conceptual Photography. Symbolic high-end art.",
+                "details": "Clean composition, single powerful symbolic object in soft dramatic spotlight. Pastel and neutral Earth tones. Shallow depth of field.",
+                "mood": "Aspirational, serene, clarity, wisdom, high-value editorial."
+            },
+            "mystery": {
+                "direction": "Atmospheric Noir. Suspenseful cinematic enigma.",
+                "details": "Chiaroscuro lighting, deep obsidian shadows, high grain texture, mysterious blurred figure or silhouette. Crimson and deep shadow palette.",
+                "mood": "Suspenseful, enigmatic, dark premium, psychological thriller."
+            },
+            "romance": {
+                "direction": "Luxury Painterly Fine-Art. Sophisticated emotional depth.",
+                "details": "Heavy impasto texture, sweeping fluid lighting, bokeh of golden light. Rich velvet textures, deep burgundy and gold palette.",
+                "mood": "Elegant, passionate, timeless, soul-stirring, masterpiece gallery quality."
+            },
+            "sci-fi": {
+                "direction": "Hyper-Detailed Futuristic Realism. Hard sci-fi aesthetic.",
+                "details": "Macro photography of advanced circuits or cosmic phenomena, intricate textures of carbon fiber and obsidian. Neon cyan and deep space black.",
+                "mood": "Complex, intellectual, vast, futuristic, precision-engineered."
+            },
+            "fantasy": {
+                "direction": "Mythic Dark Realism. Grounded high-fantasy.",
+                "details": "Ancient stone carvings, mossy textures, dim firelight, ominous misty landscapes. Emerald and weathered copper palette.",
+                "mood": "Legendary, immersive, mythic, ancient, high-stakes adventure."
+            },
+            "non-fiction": {
+                "direction": "Powerful Documentary Stills. Stark authoritative realism.",
+                "details": "Documentary photography style, high contrast, powerful human element or historical relic. Monochrome or desaturated tones.",
+                "mood": "Serious, factual, impactful, raw, historical significance."
+            }
         }
 
-        style_prompt = style_map.get(genre.lower(), style_map["non-fiction"])
+        art = archetypes.get(genre.lower(), archetypes["non-fiction"])
         
-        # We prompt for blank space where the text will be overlaid by the KDP system or the local renderer
-        # CRITICAL: We forbid text and 3D mockups to avoid hallucinations and "book-on-a-table" shots
-        # We also avoid passing the title directly to the 'image' prompt if it's non-English to prevent the model from 'trying' to spell it.
-        # Using 'Isolated flat graphic' and 'Symmetrical design' to force 2D and avoid 3D mockups.
+        # Layering prompt for extreme results
         prompt = (
-            f"Minimalist isolated flat graphic illustration on a plain solid background. {genre} theme. style: {style_prompt}. "
-            "FRONT VIEW 2D ONLY. NO 3D, NO shadows, NO books, NO mockups, NO tables. "
-            "ABSOLUTELY NO TEXT, NO LETTERS. "
-            "Clean graphic design, professional publication quality."
+            f"PROFESSIONAL PUBLICATION COVER ART: {art['direction']}. "
+            f"Visual Details: {art['details']}. "
+            f"Mood: {art['mood']}. "
+            f"Style: Cinematic High-End Photography, 8k, sharp focus, masterpiece composition. "
+            "FRONT VIEW 2D ONLY. NO 3D mockups. NO text, letters, or numbers."
         )
 
         try:
-            print(f"   🎨 Generating AI cover via Hugging Face ({CoverGenerator.DEFAULT_MODEL})...")
+            # TIER 1: FLUX.1-dev (Highest Quality, "Serious" professional output)
+            print(f"   🎨 Tier 1: Generating ELITE cover via {CoverGenerator.DEFAULT_MODEL}...")
+            client_dev = InferenceClient(model=CoverGenerator.DEFAULT_MODEL, token=token)
             
-            # Using the official InferenceClient for maximum reliability
-            client = InferenceClient(model=CoverGenerator.DEFAULT_MODEL, token=token)
-            
-            # Generate image (Sync call in huggingface_hub, so we run in executor)
-            loop = asyncio.get_event_loop()
-            image = await loop.run_in_executor(
-                None, 
-                lambda: client.text_to_image(prompt, guidance_scale=1.1, num_inference_steps=4)  # pyre-ignore[6]
-            )
-            
-            # Save the image
+            try:
+                # 45s timeout for the heavy model
+                image = await asyncio.to_thread(
+                    client_dev.text_to_image,
+                    prompt,
+                    guidance_scale=4.5,
+                    num_inference_steps=28,
+                    timeout=45
+                )  # pyre-ignore[6]
+                image.save(output_path)
+                print(f"   ✅ [TIER 1] Elite Cover generated at {output_path}")
+                return output_path
+            except Exception as tier1_err:
+                print(f"   ⚠️ [TIER 1] Failed or timed out: {tier1_err}")
+
+            # TIER 2: FLUX.1-schnell (High Quality, very reliable)
+            print(f"   🎨 Tier 2: Falling back to FLUX.1-schnell...")
+            client_fast = InferenceClient(model="black-forest-labs/FLUX.1-schnell", token=token)
+            image = await asyncio.to_thread(
+                client_fast.text_to_image,
+                prompt,
+                guidance_scale=3.5,
+                num_inference_steps=20
+            )  # pyre-ignore[6]
             image.save(output_path)
-            print(f"   ✅ AI Cover successfully generated at {output_path}")
+            print(f"   ✅ [TIER 2] High-Quality Cover generated at {output_path}")
             return output_path
 
         except Exception as e:
-            print(f"   ⚠️ Hugging Face generation failed: {e}. Trying fallback...")
+            print(f"   ❌ Visual Engine Critical Failure: {e}. Executing Pillow fallback.")
             
-        # Fallback to high-quality Local Render (Pillow)
         return CoverGenerator._generate_local_fallback(title, genre, output_path)
 
     @staticmethod

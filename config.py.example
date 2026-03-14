@@ -15,6 +15,18 @@ GROQ_MODELS = [
 GROQ_REQUEST_DELAY = 3.5
 GROQ_RPM_LIMIT = 30
 
+# LLM Provider Toggle: "groq" or "huggingface"
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "huggingface")
+
+# Image Generator Model: black-forest-labs/FLUX.1-dev or black-forest-labs/FLUX.1-schnell
+IMAGE_MODEL = os.getenv("IMAGE_MODEL", "black-forest-labs/FLUX.1-dev")
+
+# Hugging Face LLM Models (Instruct/Chat versions)
+HF_LLM_MODELS = [
+    "Qwen/Qwen2.5-72B-Instruct",
+    "meta-llama/Llama-3.1-70B-Instruct"
+]
+
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "books")
 os.makedirs(OUTPUT_DIR, exist_ok=True)

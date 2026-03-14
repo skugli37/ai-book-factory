@@ -121,47 +121,48 @@ class KDPFormatter:
             section.page_width = Inches(6)
             section.page_height = Inches(9)
             
-            # Outside margins (Top, Bottom, Right/Outside)
-            section.top_margin = Inches(0.5)
-            section.bottom_margin = Inches(0.5)
+            # Professional Margins
+            section.top_margin = Inches(0.75)
+            section.bottom_margin = Inches(0.75)
             section.right_margin = Inches(0.5)
-            
-            # Inside Margin (Gutter setup) docx handles it as left_margin in single view setup, 
-            # or mirror margins if set, but we use left margin as basic gutter offset here
             section.left_margin = Inches(0.5 + gutter_inches) 
 
-        title = self.metadata.get("title", "Untitled Manuscript")
-        author = self.metadata.get("author_name", "Unknown Author")
+        title = self.metadata.get("title", "Untitled Manuscript").upper()
+        author = self.metadata.get("author_name", "Author Name")
 
-        # Title Page Generator (no headers/footers ideally, but simple for now)
+        # Premium Title Page (Vignette Style)
+        doc.add_paragraph("\n" * 5) # Top spacer
+        
         title_para = doc.add_paragraph()
         title_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        title_para.paragraph_format.space_before = Inches(2)
         run = title_para.add_run(title)
         run.bold = True
-        run.font.size = Pt(36)
-
+        run.font.size = Pt(28)
+        
+        doc.add_paragraph("\n" * 2) # Mid spacer
+        
         author_para = doc.add_paragraph()
         author_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        run = author_para.add_run(f"by {author}")
-        run.font.size = Pt(18)
+        run = author_para.add_run(f"By {author}")
+        run.font.italic = True
+        run.font.size = Pt(16)
 
         doc.add_page_break()
 
-        # Build Copyright Page
+        # Copyright Page
+        copy_para = doc.add_paragraph()
+        copy_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        copy_para.paragraph_format.space_before = Inches(4)
+        
         copyright_text = f"""Copyright © {datetime.now().year} by {author}
+All rights reserved.
 
-All rights reserved. No part of this publication may be reproduced, distributed, or transmitted in any form or by any means, including photocopying, recording, or other electronic or mechanical methods, without the prior written permission of the publisher.
-
-This is a work of fiction. Names, characters, businesses, places, events, locales, and incidents are either the products of the author's imagination or used in a fictitious manner.
-
+This is a work of {self.metadata.get('genre', 'non-fiction')}.
 First Edition: {datetime.now().strftime("%B %Y")}
 Published by AI Book Factory
 """
-        copy_para = doc.add_paragraph(copyright_text)
-        copy_para.style = doc.styles['Normal']
-        copy_para.paragraph_format.first_line_indent = Inches(0)
-        copy_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run = copy_para.add_run(copyright_text)
+        run.font.size = Pt(9)
 
         doc.add_page_break()
 

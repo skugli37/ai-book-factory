@@ -42,8 +42,9 @@ class AIWriter:
         self.current_model_idx = (self.current_model_idx + 1) % len(self.models)
         msg = f"🔄 {old_model} rate limited. Rotating to {self.model}..."
         print(msg)
-        if self.on_rate_limit:
-            await self.on_rate_limit(msg)
+        callback = self.on_rate_limit
+        if callback:
+            await callback(msg)
 
     @retry(
         wait=wait_exponential(multiplier=2, min=5, max=90),

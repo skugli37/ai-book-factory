@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Book Factory | Your Digital Publishing House</title>
+    <link rel="stylesheet" href="css/styles.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+</head>
+<body>
+    <!-- Ambient Background -->
+    <div class="bg-mesh">
+        <div class="bg-blob" style="top: -20%; left: -10%;"></div>
+        <div class="bg-blob" style="bottom: -20%; right: -5%; background: #4338ca; animation-delay: -10s;"></div>
+    </div>
+
+    <div id="app">
+        <div class="app-shell">
+            <!-- Top Navigation Bar -->
+            <header class="top-nav glass-panel">
+                <div class="top-nav-left">
+                    <div class="logo" onclick="app.navigate('dashboard')" style="cursor:pointer;">
+                        📔 Book<span style="color: var(--acc-light); font-weight: 900;">Factory</span>.AI
+                    </div>
+                    <nav class="top-nav-links">
+                        <div class="top-nav-link" id="nav-dashboard" onclick="app.navigate('dashboard')">Workspace</div>
+                        <div class="top-nav-link" id="nav-library" onclick="app.navigate('library')">Library</div>
+                        <div class="top-nav-link" id="nav-settings" onclick="app.navigate('settings')">Settings</div>
+                    </nav>
+                </div>
+                <div class="top-nav-right">
+                    <div class="search-pill">
+                        <span>🔍</span>
+                        <input type="text" id="global-search" placeholder="Search your books...">
+                    </div>
+                    <div id="user-avatar" class="user-avatar" title="Account"></div>
+                    <button id="logout-btn" class="btn-ghost-sm">Sign Out</button>
+                </div>
+            </header>
+
+            <!-- Main Content -->
+            <main class="main-content" id="main-view">
+                <div style="display: flex; align-items: center; justify-content: center; height: 60vh;">
+                    <div style="text-align: center;">
+                        <div style="font-size: 3rem; margin-bottom: 1rem; animation: pulse 1.5s infinite;">✦</div>
+                        <p style="color: var(--text-secondary);">Initializing workspace...</p>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <script type="module" src="js/main.js"></script>
+</body>
+</html>

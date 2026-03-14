@@ -1,112 +1,148 @@
-#!/usr/bin/env python3
-"""
-BATCH BOOK GENERATOR 📚📚📚
-Generiše više knjiga odjednom - MASOVNA PROIZVODNJA
-"""
-
 import asyncio
-import os
-from book_factory import BookFactory, BookConfig
+import sqlite3
+import json
+import sys
+from pathlib import Path
+from dataclasses import asdict
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from config import BookConfig, GROQ_API_KEY  # pyre-ignore[21]
+from book_factory import BookFactory  # pyre-ignore[21]
 
-async def generate_batch(count: int = 5, genre: str = None):
-    """Generiše batch knjiga"""
+DB_FILE = "batch_queue.db"
+
+class BatchQueueDB:
+    """SQLite Persistence for Batch Book Generation queue."""
+    def __init__(self, db_path=DB_FILE):
+        self.db_path = db_path
+        self._init_db()
+
+    def _init_db(self):
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS books_queue (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    series_name TEXT,
+                    title TEXT NOT NULL,
+                    genre TEXT NOT NULL,
+                    config_json TEXT NOT NULL,
+                    status TEXT DEFAULT 'PENDING',
+                    error_log TEXT,
+                    completed_path TEXT
+                )
+            ''')
+
+    def add_book(self, config: BookConfig, series_name: str | None = None) -> int | None:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                "INSERT INTO books_queue (series_name, title, genre, config_json) VALUES (?, ?, ?, ?)",
+                (series_name, config.title, config.genre, json.dumps(asdict(config)))
+            )
+            return cursor.lastrowid
+
+    def get_pending_books(self):
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute("SELECT * FROM books_queue WHERE status = 'PENDING'")
+            return [dict(row) for row in cursor.fetchall()]
+
+    def update_status(self, book_id: int, status: str, error_log: str | None = None, path: str | None = None):
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE books_queue SET status = ?, error_log = ?, completed_path = ? WHERE id = ?",
+                (status, error_log, path, book_id)
+            )
+
+class BatchGenerator:
+    """Async Semaphore controlled batch worker for BookFactory."""
     
-    print(f"""
-    ╔══════════════════════════════════════════════════════════╗
-    ║              📚 BATCH BOOK GENERATOR 📚                  ║
-    ║                                                          ║
-    ║  Generating {count} books...                               ║
-    ╚══════════════════════════════════════════════════════════╝
-    """)
-    
-    factory = BookFactory(GROQ_API_KEY)
-    
-    results = []
-    
-    for i in range(count):
-        print(f"\n{'='*60}")
-        print(f"📚 BOOK {i+1}/{count}")
-        print(f"{'='*60}")
+    def __init__(self, max_concurrent: int = 5):
+        # We limit max concurrent books overall. 
+        # Note: Groq rate limits are internally managed inside BookFactory (20 RPM token bucket).
+        self.semaphore = asyncio.Semaphore(max_concurrent)
+        self.queue_db = BatchQueueDB()
+        self.factory = BookFactory(GROQ_API_KEY)
+
+    async def _process_book(self, book_record: dict):
+        book_id = book_record['id']
+        config = BookConfig(**json.loads(book_record['config_json']))
         
-        try:
-            book_dir = await factory.generate_book()
-            results.append({"success": True, "path": str(book_dir)})
-            print(f"✅ Book {i+1} complete!")
-        except Exception as e:
-            results.append({"success": False, "error": str(e)})
-            print(f"❌ Book {i+1} failed: {e}")
-        
-        # Pauza između knjiga (rate limiting)
-        if i < count - 1:
-            print("\n⏳ Waiting 30 seconds before next book...")
-            await asyncio.sleep(30)
-    
-    # Summary
-    print(f"\n{'='*60}")
-    print("📊 BATCH COMPLETE!")
-    print(f"{'='*60}")
-    
-    success = sum(1 for r in results if r["success"])
-    print(f"✅ Successful: {success}/{count}")
-    print(f"❌ Failed: {count - success}/{count}")
-    
-    print("\n📁 Generated books:")
-    for i, r in enumerate(results):
-        if r["success"]:
-            print(f"   {i+1}. {r['path']}")
-        else:
-            print(f"   {i+1}. FAILED: {r['error']}")
+        async with self.semaphore:
+            self.queue_db.update_status(book_id, "PROCESSING")
+            print(f"🔄 Starting job for: {config.title}")
+            try:
+                # Factory will handle internal limits and rate retries
+                book_dir = await self.factory.generate_book(config)
+                
+                # Automatically format it to DOCX upon completion
+                import sys
+                from pathlib import Path
+                sys.path.insert(0, str(Path(__file__).resolve().parent))
+                from kdp_formatter import KDPFormatter  # pyre-ignore[21]
+                try:
+                    formatter = KDPFormatter(book_dir)
+                    formatter.format_for_kdp()
+                    formatter.create_upload_checklist(
+                        formatter.metadata.get("kdp_details", formatter.metadata)
+                    )
+                except Exception as fmt_err:
+                    print(f"⚠️ Book compiled but DOCX formatting failed: {fmt_err}")
+                
+                self.queue_db.update_status(book_id, "COMPLETED", path=str(book_dir))
+                print(f"✅ Finished job for: {config.title}")
+            except Exception as e:
+                self.queue_db.update_status(book_id, "ERROR", error_log=str(e))
+                print(f"❌ Failed job for {config.title}: {e}")
 
+    async def run_queue(self):
+        """Processes all pending items in the sqlite queue."""
+        pending = self.queue_db.get_pending_books()
+        if not pending:
+            print("No pending books in queue.")
+            return
 
-async def generate_series(series_name: str, book_count: int = 3):
-    """Generiše seriju povezanih knjiga"""
-    
-    print(f"\n📚 Generating series: {series_name}")
-    print(f"   Books in series: {book_count}")
-    
-    factory = BookFactory(GROQ_API_KEY)
-    
-    # Generate series premise
-    premise_prompt = f"""Create a premise for a {book_count}-book series called "{series_name}".
-    
-Include:
-- Main character description
-- World/setting
-- Central conflict
-- How it spans {book_count} books
+        print(f"🚀 Starting batch processing of {len(pending)} books...")
+        tasks = [self._process_book(record) for record in pending]
+        
+        # Run them all, bounded by semaphore
+        await asyncio.gather(*tasks)
+        print("🎉 Batch run finalized.")
 
-Keep it to 200 words."""
-    
-    premise = await factory.writer.generate(premise_prompt, max_tokens=400)
-    print(f"\n📜 Series premise:\n{premise}\n")
-    
-    for i in range(book_count):
-        book_title = f"{series_name}: Book {i+1}"
-        print(f"\n📖 Writing: {book_title}")
+    async def queue_series(self, series_name: str, genre: str, count: int = 3):
+        """Generates dynamic config metadata for a unified series and queues them."""
         
-        config = BookConfig(
-            title=book_title,
-            genre="fantasy",
-            target_words=30000,
-            chapters=15,
-            description=f"Book {i+1} of the {series_name} series.\n\n{premise}"
-        )
+        print(f"🌎 Worldbuilding Series: {series_name}...")
         
-        await factory.generate_book(config)
+        # Build a shared lore premise using the first book factory call
+        premise_prompt = f"""Create a cohesive worldbuilding premise for a {count}-book {genre} series called "{series_name}".
+Include: Main protagonist name, the core setting, and the overarching plot spanning all books. Keep it to 250 words."""
         
-        if i < book_count - 1:
-            await asyncio.sleep(30)
+        premise = await self.factory.writer.generate(premise_prompt)
+        
+        print(f"📜 Series Lore:\n{premise[:300]}...\n")
 
+        for i in range(count):
+            book_title = f"{series_name}: Book {i+1}"
+            
+            # Simple metadata building
+            config = BookConfig(
+                title=book_title,
+                genre=genre,
+                target_words=35000,
+                chapters=14,
+                description=f"Book {i+1} in the episodic {series_name} series.\n\nLore:\n{premise}"
+            )
+            self.queue_db.add_book(config, series_name=series_name)
+            print(f"   📥 Queued: {book_title}")
+
+async def main():
+    bg = BatchGenerator(max_concurrent=3)
+    
+    # Example: seed the database and run
+    # await bg.queue_series("The Starlit Chronicles", "fantasy", count=3)
+    
+    await bg.run_queue()
 
 if __name__ == "__main__":
-    import sys
-    
-    if len(sys.argv) > 1:
-        count = int(sys.argv[1])
-    else:
-        count = 3
-    
-    asyncio.run(generate_batch(count))
+    asyncio.run(main())

@@ -1,0 +1,50 @@
+import sys
+import os
+from pathlib import Path
+
+# Add the parent directory to sys.path so we can import the original BookFactory
+sys.path.append(str(Path(__file__).parent.parent.parent.parent.parent))
+
+from book_factory import BookFactory
+from config import BookConfig
+from app.websocket.manager import manager
+import asyncio
+
+class WebBookFactory(BookFactory):
+    """Extends BookFactory to send real-time updates via WebSocket."""
+    
+    def __init__(self, job_id: str, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.job_id = job_id
+
+    async def send_progress(self, stage: str, percent: int, chapter: int = 0, text: str = ""):
+        update = {
+            "stage": stage,
+            "percent": percent,
+            "chapter": chapter,
+            "latest_text": text
+        }
+        await manager.send_update(self.job_id, update)
+
+    # We would ideally override generate_chapter etc. to call send_progress
+    # For now, let's wrap the main loop
+    async def generate_web_book(self, config: BookConfig, db_session, book_db_obj):
+        try:
+            await self.send_progress("research", 10)
+            # Actually we should modify the base class to be more granular.
+            # For this MVP, we'll manually push major stage updates.
+            
+            # TODO: Refactor BookFactory to use a reporter/callback system
+            # For now, just run it.
+            book_dir = await self.generate_book(config)
+            
+            # Update DB
+            book_db_obj.status = "completed"
+            book_db_obj.docx_path = str(book_dir / "book_kdp.docx")
+            db_session.commit()
+            
+            await self.send_progress("complete", 100)
+        except Exception as e:
+            await self.send_progress("failed", 0, text=str(e))
+            book_db_obj.status = "failed"
+            db_session.commit()

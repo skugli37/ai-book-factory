@@ -1,0 +1,44 @@
+import os
+
+# Example configuration file
+# Fill in your keys and rename this to config.py
+
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "YOUR_KEY_HERE")
+HF_TOKEN = os.getenv("HF_TOKEN", "YOUR_KEY_HERE")
+
+GROQ_MODELS = [
+    "llama-3.3-70b-versatile",
+    "llama-3.1-8b-instant",
+    "llama-3.1-70b-versatile"
+]
+
+GROQ_REQUEST_DELAY = 3.5
+GROQ_RPM_LIMIT = 30
+
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+OUTPUT_DIR = os.path.join(PROJECT_ROOT, "books")
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+KDP_FONT = "Garamond"
+
+from dataclasses import dataclass, field
+from typing import List
+
+@dataclass
+class BookConfig:
+    title: str
+    genre: str
+    target_words: int
+    chapters: int
+    topic: str = ""
+    writing_style: str = "Professional, concise, and engaging"
+    tone: str = "professional"
+    target_audience: str = "general audience"
+    niche_keywords: List[str] = field(default_factory=list)
+    language: str = "english"
+    author_name: str = "AI Publishing House"
+    description: str = ""
+
+PROFITABLE_NICHES = [
+    # ... existing niches ...
+]

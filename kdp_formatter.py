@@ -1,282 +1,253 @@
-#!/usr/bin/env python3
-"""
-AMAZON KDP FORMATTER 📖
-Formatira generirane knjige za Amazon KDP upload
-
-Izlazni formati:
-- DOCX (Word) - KDP preferred
-- EPUB - za ebook
-- PDF - za print
-"""
-
-import os
 import json
+import math
 from pathlib import Path
 from datetime import datetime
 
 try:
-    from docx import Document
-    from docx.shared import Inches, Pt
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
-    HAS_DOCX = True
+    from docx import Document # pyre-ignore[21]
+    from docx.shared import Inches, Pt # pyre-ignore[21]
+    from docx.enum.text import WD_ALIGN_PARAGRAPH # pyre-ignore[21]
+    from docx.oxml import OxmlElement # pyre-ignore[21]
+    from docx.oxml.ns import qn # pyre-ignore[21]
 except ImportError:
-    HAS_DOCX = False
-
+    raise ImportError("python-docx is not installed. Please pip install python-docx")
 
 class KDPFormatter:
-    """Formatira knjige za Amazon KDP"""
-    
-    # KDP preporučene dimenzije
-    TRIM_SIZES = {
-        "5x8": (5, 8),          # Najpopularnija
-        "5.5x8.5": (5.5, 8.5),  # Standardna
-        "6x9": (6, 9),          # Veća
-    }
-    
+    """Formats Markdown/Text books into KDP compliant .docx manuscripts."""
+
     def __init__(self, book_dir: Path):
-        self.book_dir = Path(book_dir)
+        self.book_dir = book_dir
         self.metadata = self._load_metadata()
-    
+
     def _load_metadata(self) -> dict:
-        """Učitaj metadata"""
         meta_path = self.book_dir / "metadata.json"
         if meta_path.exists():
-            with open(meta_path) as f:
+            with open(meta_path, "r", encoding="utf-8") as f:
                 return json.load(f)
         return {}
-    
-    def format_for_kdp(self, trim_size: str = "5.5x8.5") -> Path:
-        """Kreiraj KDP-ready DOCX fajl"""
+
+    def _add_hyperlink(self, paragraph, text, target):
+        """Adds a clickable hyperlink within a paragraph."""
+        part = paragraph.part
+        r_id = part.relate_to(target, "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink", is_external=True)
+
+        hyperlink = OxmlElement('w:hyperlink')
+        hyperlink.set(qn('r:id'), r_id)
+
+        new_run = OxmlElement('w:r')
+        rPr = OxmlElement('w:rPr')
         
-        if not HAS_DOCX:
-            print("❌ python-docx not installed!")
-            print("   Run: pip install python-docx")
-            return None
+        # Style the link
+        u = OxmlElement('w:u')
+        u.set(qn('w:val'), 'single')
+        rPr.append(u)
         
-        # Učitaj tekst
-        txt_path = self.book_dir / "book.txt"
-        md_path = self.book_dir / "book.md"
+        color = OxmlElement('w:color')
+        color.set(qn('w:val'), '0000FF') # Blue
+        rPr.append(color)
+
+        new_run.append(rPr)
+        t = OxmlElement('w:t')
+        t.text = text
+        new_run.append(t)
+        hyperlink.append(new_run)
+
+        paragraph._p.append(hyperlink)
+        return hyperlink
+
+    def _add_bookmark(self, paragraph, name):
+        """Adds a bookmark at the start of a paragraph."""
+        tag = paragraph._p
+        start = OxmlElement('w:bookmarkStart')
+        start.set(qn('w:id'), '0')
+        start.set(qn('w:name'), name)
+        tag.insert(0, start)
         
-        if md_path.exists():
-            with open(md_path, encoding="utf-8") as f:
-                content = f.read()
-        elif txt_path.exists():
-            with open(txt_path, encoding="utf-8") as f:
-                content = f.read()
+        end = OxmlElement('w:bookmarkEnd')
+        end.set(qn('w:id'), '0')
+        tag.append(end)
+
+    def _calculate_gutter(self, page_count: int) -> float:
+        """
+        Dynamic gutter calculation per Amazon KDP specs:
+        - 24-150 pages: 0.375"
+        - 151-400 pages: 0.75"
+        - 401-600 pages: 0.875"
+        - 600+ pages: 1.0"
+        """
+        if page_count < 151:
+            return 0.375
+        elif page_count < 401:
+            return 0.75
+        elif page_count < 601:
+            return 0.875
         else:
-            raise FileNotFoundError("No book content found!")
+            return 1.0
+
+    def format_for_kdp(self) -> Path:
+        """Creates the formal 6x9 compliant DOCX."""
+        txt_path = self.book_dir / "book.txt"
         
-        # Kreiraj Word dokument
+        if not txt_path.exists():
+            raise FileNotFoundError(f"Source text file not found at {txt_path}")
+
+        # Basic KDP 6x9 Trim Size logic
+        estimated_pages = self.metadata.get("estimated_pages", 200)
+        gutter_inches = self._calculate_gutter(estimated_pages)
+
         doc = Document()
-        
-        # Postavi margine (KDP zahtijeva minimum 0.25")
+
+        # Define styles
+        style = doc.styles['Normal']
+        font = style.font
+        import config # pyre-ignore[21]
+        font.name = getattr(config, "KDP_FONT", "Garamond")
+        font.size = Pt(11)
+        # Leading (line spacing)
+        style.paragraph_format.line_spacing = Pt(14)
+        # Indents (no manual tabs allowed)
+        style.paragraph_format.first_line_indent = Inches(0.5)
+
+        h1 = doc.styles['Heading 1']
+        h1.font.name = 'Garamond'
+        h1.font.size = Pt(24)
+        h1.font.bold = True
+        h1.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        h1.paragraph_format.space_before = Pt(48)
+        h1.paragraph_format.space_after = Pt(24)
+
+        # Apply 6x9 margins with dynamic gutter
         for section in doc.sections:
-            section.left_margin = Inches(0.75)
-            section.right_margin = Inches(0.75)
-            section.top_margin = Inches(0.75)
-            section.bottom_margin = Inches(0.75)
-        
-        # Naslovna strana
-        title = self.metadata.get("title", "Untitled")
-        author = self.metadata.get("author", "Unknown")
-        
-        # Title
+            section.page_width = Inches(6)
+            section.page_height = Inches(9)
+            
+            # Outside margins (Top, Bottom, Right/Outside)
+            section.top_margin = Inches(0.5)
+            section.bottom_margin = Inches(0.5)
+            section.right_margin = Inches(0.5)
+            
+            # Inside Margin (Gutter setup) docx handles it as left_margin in single view setup, 
+            # or mirror margins if set, but we use left margin as basic gutter offset here
+            section.left_margin = Inches(0.5 + gutter_inches) 
+
+        title = self.metadata.get("title", "Untitled Manuscript")
+        author = self.metadata.get("author_name", "Unknown Author")
+
+        # Title Page Generator (no headers/footers ideally, but simple for now)
         title_para = doc.add_paragraph()
         title_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        title_para.paragraph_format.space_before = Inches(2)
         run = title_para.add_run(title)
         run.bold = True
-        run.font.size = Pt(28)
-        
-        # Author
-        doc.add_paragraph()
+        run.font.size = Pt(36)
+
         author_para = doc.add_paragraph()
         author_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
         run = author_para.add_run(f"by {author}")
-        run.font.size = Pt(16)
-        
-        # Page break
+        run.font.size = Pt(18)
+
         doc.add_page_break()
-        
-        # Copyright page
-        copyright_text = f"""Copyright © {datetime.now().year} {author}
+
+        # Build Copyright Page
+        copyright_text = f"""Copyright © {datetime.now().year} by {author}
 
 All rights reserved. No part of this publication may be reproduced, distributed, or transmitted in any form or by any means, including photocopying, recording, or other electronic or mechanical methods, without the prior written permission of the publisher.
 
 This is a work of fiction. Names, characters, businesses, places, events, locales, and incidents are either the products of the author's imagination or used in a fictitious manner.
 
 First Edition: {datetime.now().strftime("%B %Y")}
+Published by AI Book Factory
 """
-        
-        copyright_para = doc.add_paragraph(copyright_text)
-        copyright_para.style.font.size = Pt(10)
-        
+        copy_para = doc.add_paragraph(copyright_text)
+        copy_para.style = doc.styles['Normal']
+        copy_para.paragraph_format.first_line_indent = Inches(0)
+        copy_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
         doc.add_page_break()
+
+        # Table of Contents logic (simplified clickable list)
+        doc.add_heading('Table of Contents', level=1)
         
-        # Sadržaj knjige
-        lines = content.split("\n")
-        current_chapter = None
+        # We need the outline to build the TOC, let's parse titles first
+        with open(txt_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
         
+        chapter_titles = []
         for line in lines:
-            line = line.strip()
+            if line.strip().startswith("CHAPTER "):
+                title_text = line.strip().split(":", 1)[-1].strip() if ":" in line else line.strip()
+                chapter_titles.append(title_text)
+
+        for i, ct in enumerate(chapter_titles):
+            p = doc.add_paragraph()
+            p.paragraph_format.first_line_indent = Inches(0)
             
-            if not line:
+            # Internal link logic: Target must match the bookmark name
+            # Note: docx internal hyperlinking is non-trivial, using standard text for now
+            # but ensuring the structure is ready for the heading styles that Word auto-links.
+            p.add_run(f"{i+1}. {ct}")
+            
+        doc.add_page_break()
+
+        # Read the raw text and parse
+        with open(txt_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+
+        # Start content chunking
+        in_chapter = False
+        
+        for idx, line in enumerate(lines):
+            stripped = line.strip()
+            if not stripped:
                 continue
-            
-            # Detekcija poglavlja
-            if line.startswith("## Chapter") or line.startswith("CHAPTER"):
+                
+            if stripped.startswith("CHAPTER"):
                 doc.add_page_break()
-                chapter_para = doc.add_heading(line.replace("## ", "").replace("#", ""), level=1)
-                chapter_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            elif line.startswith("# ") and "Chapter" not in line:
-                # Skip title, already added
+                in_chapter = True
+                
+                # Excerpt "CHAPTER 1: Title"
+                title_text = stripped.split(":", 1)[-1].strip() if ":" in stripped else stripped
+                h_para = doc.add_heading(title_text, level=1)
+                
+                # Add Bookmark for TOC (matching the name used in Word or TOC logic)
+                # self._add_bookmark(h_para, f"chapter_{i}") # Simplified bookmarking
+                
+                # Insert Chapter Illustration if exists
+                art_count = sum(1 for i in range(idx) if lines[i].strip().startswith("CHAPTER ")) + 1
+                art_path = self.book_dir / f"chapter_{art_count}.png"
+                if art_path.exists():
+                    doc.add_picture(str(art_path), width=Inches(4.5))
+                    last_para = doc.paragraphs[-1]
+                    last_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    doc.add_paragraph("\n") # Spacer
+                
+            elif stripped.startswith("======"):
                 continue
-            elif line.startswith("---"):
-                continue
-            elif line.startswith("*") and line.endswith("*"):
-                # Italic (author line)
-                continue
-            else:
-                # Regular paragraph
-                para = doc.add_paragraph(line)
-                para.style.font.size = Pt(11)
-                # First line indent
-                para.paragraph_format.first_line_indent = Inches(0.3)
-        
-        # Sačuvaj
+                
+            elif in_chapter:
+                # Add a normal content paragraph 
+                para = doc.add_paragraph(stripped)
+                para.style = doc.styles['Normal']
+                
         output_path = self.book_dir / "book_kdp.docx"
-        doc.save(output_path)
-        
-        print(f"✅ KDP-ready DOCX saved: {output_path}")
+        doc.save(str(output_path))
+        print(f"✅ Generated compliant DOCX: {output_path}")
         return output_path
-    
-    def generate_kdp_details(self) -> dict:
-        """Generiši detalje za KDP upload"""
-        
-        details = {
-            "title": self.metadata.get("title", ""),
-            "subtitle": "",  # Extract from title if has ":"
-            "author": self.metadata.get("author", ""),
-            "description": self.metadata.get("description", ""),
-            "keywords": self.metadata.get("keywords", [])[:7],  # KDP max 7
-            "categories": self._suggest_categories(),
-            "price_suggestions": {
-                "ebook": {"min": 2.99, "recommended": 4.99, "max": 9.99},
-                "paperback": {"min": 7.99, "recommended": 12.99, "max": 19.99},
-            }
-        }
-        
-        # Parse subtitle
-        if ":" in details["title"]:
-            parts = details["title"].split(":", 1)
-            details["title"] = parts[0].strip()
-            details["subtitle"] = parts[1].strip()
-        
-        return details
-    
-    def _suggest_categories(self) -> list:
-        """Predloži KDP kategorije na osnovu žanra"""
-        
-        genre = self.metadata.get("genre", "").lower()
-        
-        category_map = {
-            "self-help": [
-                "Self-Help > Personal Growth > Success",
-                "Self-Help > Motivational",
-            ],
-            "romance": [
-                "Romance > Contemporary",
-                "Romance > New Adult & College",
-            ],
-            "business": [
-                "Business & Money > Small Business & Entrepreneurship",
-                "Business & Money > Personal Finance",
-            ],
-            "mystery": [
-                "Mystery, Thriller & Suspense > Mystery",
-                "Mystery, Thriller & Suspense > Cozy Mystery",
-            ],
-            "fantasy": [
-                "Science Fiction & Fantasy > Fantasy",
-                "Science Fiction & Fantasy > Epic Fantasy",
-            ],
-        }
-        
-        return category_map.get(genre, ["Fiction > General"])
-    
-    def create_upload_checklist(self) -> str:
-        """Kreiraj checklist za KDP upload"""
-        
-        details = self.generate_kdp_details()
-        
-        checklist = f"""
-╔══════════════════════════════════════════════════════════════╗
-║                📋 KDP UPLOAD CHECKLIST                       ║
-╚══════════════════════════════════════════════════════════════╝
-
-📖 BOOK DETAILS
-   Title: {details['title']}
-   Subtitle: {details['subtitle'] or 'N/A'}
-   Author: {details['author']}
-   
-📝 DESCRIPTION
-{details['description'][:500]}...
-
-🏷️ KEYWORDS (max 7):
-{chr(10).join(f'   • {kw}' for kw in details['keywords'])}
-
-📂 CATEGORIES:
-{chr(10).join(f'   • {cat}' for cat in details['categories'])}
-
-💰 PRICING SUGGESTIONS:
-   Ebook:     ${details['price_suggestions']['ebook']['recommended']:.2f}
-   Paperback: ${details['price_suggestions']['paperback']['recommended']:.2f}
-
-📁 FILES TO UPLOAD:
-   ☐ book_kdp.docx (manuscript)
-   ☐ cover.png (cover image)
-   
-✅ PRE-UPLOAD CHECKLIST:
-   ☐ Proofread content
-   ☐ Check formatting in Kindle Previewer
-   ☐ Cover meets KDP requirements (min 1000x1600px)
-   ☐ Description is compelling
-   ☐ Keywords researched
-   ☐ Price set competitively
-
-🔗 UPLOAD AT:
-   https://kdp.amazon.com
-"""
-        
-        # Save checklist
-        checklist_path = self.book_dir / "kdp_checklist.txt"
-        with open(checklist_path, "w") as f:
-            f.write(checklist)
-        
-        print(checklist)
-        return checklist
-
 
 def format_all_books():
-    """Formatiraj sve generirane knjige"""
-    
-    books_dir = Path("./books")
-    
+    books_dir = Path("books")
     if not books_dir.exists():
-        print("❌ No books directory found!")
+        print("No books directory found to format.")
         return
-    
-    for book_dir in books_dir.iterdir():
-        if book_dir.is_dir():
-            print(f"\n📖 Processing: {book_dir.name}")
-            
-            formatter = KDPFormatter(book_dir)
-            
+        
+    for item in books_dir.iterdir():
+        if item.is_dir():
+            print(f"Formatting {item.name}...")
+            formatter = KDPFormatter(item)
             try:
                 formatter.format_for_kdp()
-                formatter.create_upload_checklist()
             except Exception as e:
-                print(f"   ❌ Error: {e}")
-
+                print(f"Error formatting {item.name}: {e}")
 
 if __name__ == "__main__":
     format_all_books()

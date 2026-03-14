@@ -1,203 +1,76 @@
-#!/usr/bin/env python3
-"""
-AI BOOK FACTORY 📚
-Automatski generiše knjige i objavljuje na Amazon KDP
-
-Besplatni resursi:
-- Groq API (Llama 70B) - pisanje teksta
-- Pollinations.ai - cover slike (besplatno, bez API key)
-- Amazon KDP - objavljivanje (besplatno)
-"""
-
 import asyncio
-import aiohttp
-import json
-import os
+import aiohttp  # pyre-ignore[21]
 import random
 import re
 from pathlib import Path
-from datetime import datetime
 from dataclasses import dataclass
 from typing import List, Optional
+from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type  # pyre-ignore[21]
 
-# Konfiguracija
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-OUTPUT_DIR = Path("./books")
-OUTPUT_DIR.mkdir(exist_ok=True)
-
-
-@dataclass
-class BookConfig:
-    """Konfiguracija za generisanje knjige"""
-    title: str
-    genre: str
-    target_words: int
-    chapters: int
-    language: str = "english"
-    author_name: str = "AI Publishing House"
-    description: str = ""
-    keywords: List[str] = None
-
+from config import BookConfig, PROFITABLE_NICHES, GROQ_API_KEY, GROQ_MODELS, OUTPUT_DIR, HF_TOKEN  # pyre-ignore[21]
+from cover_generator import CoverGenerator  # pyre-ignore[21]
+from metadata_generator import MetadataGenerator  # pyre-ignore[21]
+from kdp_formatter import KDPFormatter  # pyre-ignore[21]
+from research.orchestrator import ResearchOrchestrator  # pyre-ignore[21]
+from proofreader import ProofreaderAgent  # pyre-ignore[21]
+from illustration_generator import IllustrationGenerator  # pyre-ignore[21]
+from marketing_kit import MarketingKitGenerator  # pyre-ignore[21]
+from character_sheet import CharacterSheet  # pyre-ignore[21]
+from writer import AIWriter, RateLimitError # pyre-ignore[21]
 
 @dataclass
 class Chapter:
-    """Jedno poglavlje"""
+    """A generated chapter"""
     number: int
     title: str
     content: str
     word_count: int
 
-
-class AIWriter:
-    """Generiše tekst koristeći Groq (Llama 70B) - BESPLATNO"""
-    
-    def __init__(self, api_key: str):
-        self.api_key = api_key
-        self.base_url = "https://api.groq.com/openai/v1/chat/completions"
-        self.model = "llama-3.3-70b-versatile"
-    
-    async def generate(self, prompt: str, system: str = "", max_tokens: int = 4000) -> str:
-        """Generiše tekst"""
-        
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
-        }
-        
-        messages = []
-        if system:
-            messages.append({"role": "system", "content": system})
-        messages.append({"role": "user", "content": prompt})
-        
-        payload = {
-            "model": self.model,
-            "messages": messages,
-            "max_tokens": max_tokens,
-            "temperature": 0.8,
-        }
-        
-        async with aiohttp.ClientSession() as session:
-            async with session.post(self.base_url, headers=headers, json=payload) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    return data["choices"][0]["message"]["content"]
-                else:
-                    error = await resp.text()
-                    raise Exception(f"Groq API error: {error}")
-
-
-class CoverGenerator:
-    """Generiše book cover koristeći Pollinations.ai - BESPLATNO, BEZ API KEY"""
-    
-    @staticmethod
-    async def generate(title: str, genre: str, output_path: Path) -> Path:
-        """Generiše cover sliku"""
-        
-        # Prompt za cover
-        style_map = {
-            "romance": "romantic couple silhouette, sunset, soft colors, elegant typography",
-            "thriller": "dark mysterious atmosphere, suspenseful, noir style",
-            "self-help": "minimalist, inspiring, clean design, motivational",
-            "fantasy": "magical landscape, epic, dragons, castles",
-            "sci-fi": "futuristic cityscape, space, neon lights, cyberpunk",
-            "mystery": "foggy street, detective noir, vintage",
-            "horror": "dark forest, creepy atmosphere, gothic",
-            "business": "professional, corporate, success imagery",
-        }
-        
-        style = style_map.get(genre.lower(), "professional book cover design")
-        
-        prompt = f"Book cover for '{title}', {style}, high quality, no text, cinematic"
-        prompt_encoded = prompt.replace(" ", "%20")
-        
-        # Pollinations.ai - besplatno, bez registracije
-        url = f"https://image.pollinations.ai/prompt/{prompt_encoded}?width=1600&height=2560&nologo=true"
-        
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url) as resp:
-                if resp.status == 200:
-                    image_data = await resp.read()
-                    with open(output_path, "wb") as f:
-                        f.write(image_data)
-                    print(f"✅ Cover saved: {output_path}")
-                    return output_path
-                else:
-                    raise Exception(f"Cover generation failed: {resp.status}")
-
+from writer import AIWriter, RateLimitError # pyre-ignore[21]
 
 class BookFactory:
-    """Glavna fabrika za generisanje knjiga"""
-    
-    # Profitable niše na Amazon KDP
-    PROFITABLE_NICHES = [
-        {
-            "genre": "self-help",
-            "topics": [
-                "Morning routines for success",
-                "Overcoming anxiety naturally",
-                "Building confidence in 30 days",
-                "Mindfulness for beginners",
-                "Breaking bad habits",
-                "Emotional intelligence mastery",
-                "Stoicism for modern life",
-                "Digital detox guide",
-            ]
-        },
-        {
-            "genre": "romance",
-            "topics": [
-                "Second chance romance",
-                "Small town love story",
-                "Enemies to lovers",
-                "Boss and employee romance",
-                "Summer beach romance",
-                "Christmas love story",
-                "Fake dating becomes real",
-                "Best friend's brother",
-            ]
-        },
-        {
-            "genre": "business",
-            "topics": [
-                "Passive income strategies",
-                "Freelancing for beginners",
-                "Starting online business",
-                "Real estate investing basics",
-                "Cryptocurrency for beginners",
-                "Side hustle ideas",
-                "Negotiation tactics",
-                "Remote work productivity",
-            ]
-        },
-        {
-            "genre": "mystery",
-            "topics": [
-                "Small town murder mystery",
-                "Cozy mystery with cats",
-                "Amateur detective story",
-                "Cold case investigation",
-                "Locked room mystery",
-            ]
-        },
-    ]
-    
-    def __init__(self, groq_api_key: str):
-        self.writer = AIWriter(groq_api_key)
-        self.cover_gen = CoverGenerator()
-    
-    async def generate_book_idea(self, genre: str = None) -> BookConfig:
-        """Generiše ideju za knjigu"""
+    """The central orchestration engine for generating books."""
+
+    def __init__(self, api_key: str = GROQ_API_KEY, progress_callback=None):
+        if not api_key:
+            raise ValueError("GROQ_API_KEY is missing. Please set the environment variable.")
+        
+        self.progress_callback = progress_callback
+        
+        async def on_rate_limit(msg: str):
+            # Report rate limit to UI heartbeat
+            await self.report_progress("writing", percent=-1, text=msg)
+
+        self.writer = AIWriter(api_key, on_rate_limit=on_rate_limit)
+        self.output_dir = Path(OUTPUT_DIR)
+        self.output_dir.mkdir(exist_ok=True)
+        # Initialize Research Orchestrator (handles DDG + Groq)
+        self.research = ResearchOrchestrator(self.writer)
+        # Initialize Proofreader Agent
+        self.proofreader = ProofreaderAgent(self.writer)
+        # Initialize Illustration Generator (uses HF Token)
+        self.illustrator = IllustrationGenerator(HF_TOKEN)
+        # Initialize Character Sheet (lazy loaded later)
+        self.characters: Optional[CharacterSheet] = None
+
+    async def report_progress(self, stage: str, percent: int, chapter: int = 0, text: str = "", extra_data: dict | None = None):
+        if self.progress_callback:
+            if asyncio.iscoroutinefunction(self.progress_callback):
+                await self.progress_callback(stage, percent, chapter, text, extra_data)
+            else:
+                self.progress_callback(stage, percent, chapter, text, extra_data)
+
+    async def generate_book_idea(self, genre: str | None = None) -> BookConfig:
+        """Generates a viable book idea."""
         
         if genre is None:
-            niche = random.choice(self.PROFITABLE_NICHES)
+            niche = random.choice(PROFITABLE_NICHES)
         else:
-            niche = next((n for n in self.PROFITABLE_NICHES if n["genre"] == genre), 
-                        self.PROFITABLE_NICHES[0])
-        
+            niche = next((n for n in PROFITABLE_NICHES if n["genre"].lower() == genre.lower()), PROFITABLE_NICHES[0])
+
         topic = random.choice(niche["topics"])
-        
-        # Generiši naslov
-        prompt = f"""Generate a catchy, marketable book title for a {niche['genre']} book about: {topic}
+
+        prompt = f"""Generate a catchy, marketable book title for a '{niche['genre']}' book about: {topic}
 
 Rules:
 - Title should be 3-7 words
@@ -207,11 +80,9 @@ Rules:
 
 Example format: "Main Title: Compelling Subtitle Here"
 """
-        
         title = await self.writer.generate(prompt, max_tokens=100)
-        title = title.strip().strip('"')
-        
-        # Generiši opis
+        title = title.strip().strip('"*\n')
+
         desc_prompt = f"""Write a compelling Amazon book description for: "{title}"
 Genre: {niche['genre']}
 Topic: {topic}
@@ -220,38 +91,36 @@ Rules:
 - 150-200 words
 - Hook reader in first sentence
 - Include bullet points of what they'll learn
-- End with call to action
+- End with a call to action
 - Make it sound professional and valuable
 """
-        
         description = await self.writer.generate(desc_prompt, max_tokens=500)
-        
-        # Konfiguracija knjige
+
         word_targets = {
             "self-help": 15000,
             "romance": 40000,
             "business": 20000,
             "mystery": 50000,
         }
-        
+
         chapter_counts = {
             "self-help": 10,
             "romance": 20,
             "business": 12,
             "mystery": 25,
         }
-        
+
         return BookConfig(
             title=title,
             genre=niche["genre"],
             target_words=word_targets.get(niche["genre"], 20000),
             chapters=chapter_counts.get(niche["genre"], 12),
             description=description,
-            keywords=[topic, niche["genre"], "bestseller", "2025"]
+            niche_keywords=[topic, niche["genre"], "bestseller", "2025"]
         )
-    
+
     async def generate_outline(self, config: BookConfig) -> List[str]:
-        """Generiše outline knjige"""
+        """Generates the chapter outline structure."""
         
         prompt = f"""Create a detailed chapter outline for a {config.genre} book titled: "{config.title}"
 
@@ -264,213 +133,234 @@ Requirements:
 Example:
 1. The Awakening
 2. First Steps
-...
 """
-        
         response = await self.writer.generate(prompt, max_tokens=1000)
-        
-        # Parse chapter titles
-        chapters = []
+
+        chapters: List[str] = []
         for line in response.strip().split("\n"):
             line = line.strip()
             if line and line[0].isdigit():
-                # Remove number and dot
-                title = re.sub(r'^\d+[\.\)]\s*', '', line)
+                title = re.sub(r'^\d+[\.\)]\s*', '', line).strip("*")
                 if title:
                     chapters.append(title)
-        
-        # Ensure we have enough chapters
-        while len(chapters) < config.chapters:
-            chapters.append(f"Chapter {len(chapters) + 1}")
-        
-        return chapters[:config.chapters]
-    
+
+        limit = int(config.chapters)
+        return chapters[0:limit]  # pyre-ignore[6]
+
     async def generate_chapter(self, config: BookConfig, chapter_num: int, 
                               chapter_title: str, outline: List[str],
                               previous_summary: str = "") -> Chapter:
-        """Generiše jedno poglavlje"""
+        """Generates the main text content for a single chapter with live research."""
+        
+        # Step 1: Perform live research for the chapter topic
+        research = await self.research.research(chapter_title)
+        
+        # Step 1.5: Character Context (if fiction)
+        char_context = ""
+        mgr = self.characters
+        if mgr is not None:
+            char_context = mgr.get_all_characters()
         
         words_per_chapter = config.target_words // config.chapters
-        
-        system_prompt = f"""You are a professional {config.genre} author writing a book titled "{config.title}".
-Write engaging, well-crafted prose. Maintain consistent tone and style throughout.
-This is chapter {chapter_num} of {config.chapters}."""
-        
-        context = f"Previous chapters summary: {previous_summary}" if previous_summary else "This is the beginning of the book."
-        
-        prompt = f"""Write Chapter {chapter_num}: "{chapter_title}"
 
-Book: "{config.title}"
-Genre: {config.genre}
-{context}
+        system_prompt = f"""You are a prestigious, high-end {config.genre} author known for technical depth, unique insights, and a gripping narrative style. 
+Your book is titled '{config.title}'. 
 
-Full chapter outline for context:
-{chr(10).join(f'{i+1}. {t}' for i, t in enumerate(outline))}
-
-Requirements:
-- Write approximately {words_per_chapter} words
-- Start with a hook
-- Include dialogue where appropriate
-- End with something that makes reader want to continue
-- Write the FULL chapter content, not an outline
-
-Begin writing the chapter now:
+CRITICAL WRITING RULES:
+1. NO AI SLANG: Avoid generic phrases like 'In today's digital age', 'ever-evolving landscape', 'a multi-faceted approach', or 'it is crucial to remember'.
+2. BE SPECIFIC: Never use vague generalizations. Use the provided research as primary evidence. 
+3. DEPTH OVER BREADTH: For every point you make, provide a detailed 'why' and a 'how'. 
+4. VARY SENTENCE STRUCTURE: Use a mix of short, punchy sentences and complex, descriptive ones. 
+5. NO REPETITION: Do not repeat concepts or key phrases (especially thematic ones like 'killer tech') across paragraphs.
+6. NO INTRO/OUTRO FLUFF: Do not start chapters with "In this chapter, we will explore...". Dive straight into the meat of the content.
 """
         
-        content = await self.writer.generate(prompt, max_tokens=4000)
+        context = f"So far in the book: {previous_summary}\n" if previous_summary else "This is the opening of the volume.\n"
+
+        prompt = f"""Write a massive and detailed Chapter {chapter_num}: "{chapter_title}"
+
+Target Genre: {config.genre}
+Context: {context}
+{char_context}
+
+Outline for reference:
+{chr(10).join(f'{i+1}. {t}' for i, t in enumerate(outline))}
+
+LIVE RESEARCH DATA (Use this to provide real-world value and authority):
+{research.summary}
+
+Top Sources to cite/integrate: {", ".join(r.url for r in research.results[:3])}
+
+TECHNICAL REQUIREMENTS:
+- TONE: {config.tone}, highly authoritative and premium.
+- LENGTH: Expand until you reach roughly {words_per_chapter} words. 
+- FORMAT: Raw narrative text. NO summaries, NO bullet points (unless part of a listicle section), NO intros.
+- NO REPETITION: Ensure every paragraph brings a NEW insight or evidence piece.
+
+STRETCH THE DEPTH: If you feel you are finishing too early, find a specific sub-topic from the Research Data and perform a 'Deep Dive' sidebar in the text.
+
+BEGIN CHAPTER {chapter_num} IMMEDIATELY:
+"""
+        content = await self.writer.generate(prompt, system=system_prompt, max_tokens=4000)
         
-        # Count words
+        # Step 2: Proofread and refine the content
+        content = await self.proofreader.refined_proofread(chapter_title, content)
+        
+        # Step 3: Update Character Sheet
+        mgr_update = self.characters
+        if mgr_update is not None:
+            await mgr_update.extract_characters_from_text(self.writer, content, chapter_num)
+            
         word_count = len(content.split())
-        
+
         return Chapter(
             number=chapter_num,
             title=chapter_title,
             content=content,
             word_count=word_count
         )
-    
-    async def generate_book(self, config: BookConfig = None) -> Path:
-        """Generiše kompletnu knjigu"""
+
+    async def _write_markdown_and_txt(self, config: BookConfig, chapters: List[Chapter], book_dir: Path):
+        """Assembles and writes the plain text and markdown versions."""
         
+        md_path = book_dir / "book.md"
+        with open(md_path, "w", encoding="utf-8") as f:
+            f.write(f"# {config.title}\n\n*By {config.author_name}*\n\n---\n\n")
+            f.write(f"## Description\n\n{config.description}\n\n---\n\n")
+            for chapter in chapters:
+                f.write(f"## {chapter.title}\n\n{chapter.content}\n\n---\n\n")
+        
+        txt_path = book_dir / "book.txt"
+        with open(txt_path, "w", encoding="utf-8") as f:
+            f.write(f"{config.title}\nBy {config.author_name}\n\n")
+            for chapter in chapters:
+                f.write(f"\n{'='*40}\nCHAPTER {chapter.number}: {chapter.title}\n{'='*40}\n\n")
+                f.write(f"{chapter.content}\n")
+
+    async def generate_book(self, config: BookConfig | None = None) -> Path:
+        """The main pipeline execution function."""
+        
+        num_retries: int = 3
+        while num_retries > 0:
+            if config is None:
+                print("📚 Bootstrapping dynamic book idea...")
+                try:
+                    await self.report_progress("idea_generation", 5)
+                    config = await self.generate_book_idea()
+                except RateLimitError:
+                    print("Hit rate limits during idea generation. Retrying...")
+                    await asyncio.sleep(5)
+                    num_retries = num_retries - 1  # pyre-ignore[58]
+                    continue
+            break
+            break
+            
         if config is None:
-            print("📚 Generating book idea...")
-            config = await self.generate_book_idea()
+            raise Exception("Failed to generate book idea due to persistent rate limiting.")
         
-        print(f"\n{'='*60}")
-        print(f"📖 GENERATING: {config.title}")
-        print(f"📚 Genre: {config.genre}")
-        print(f"📝 Target: {config.target_words:,} words in {config.chapters} chapters")
-        print(f"{'='*60}\n")
+        # Help type checker see config as non-None
+        current_config: BookConfig = config
+        assert current_config is not None
+
+        print(f"\n============================================================")
+        print(f"📖 TARGET: {current_config.title}")  # pyre-ignore[16]
+        print(f"📚 GENRE: {current_config.genre} | 📝 TARGET: {current_config.target_words:,} words")  # pyre-ignore[16]
+        print(f"============================================================\n")
+
+        # Sanitize title for filesystem (strip newlines, replace spaces with underscores, limit length)
+        clean_title = str(current_config.title).replace('\n', ' ').strip()
+        safe_title = re.sub(r'[^\w\s-]', '', clean_title)
+        safe_title = str(re.sub(r'\s+', '_', safe_title))[:50].strip('_')
         
-        # Create book directory
-        safe_title = re.sub(r'[^\w\s-]', '', config.title)[:50].strip()
-        book_dir = OUTPUT_DIR / safe_title
-        book_dir.mkdir(exist_ok=True)
+        book_dir = self.output_dir / safe_title
+        book_dir.mkdir(exist_ok=True, parents=True)
+
+        # Initialize Character Sheet for this specific book
+        self.characters = CharacterSheet(book_dir / "characters.db")
+
+        await self.report_progress("planning", 15)
+        print("📋 Planning outline structure...")
+        outline = await self.generate_outline(current_config)  # pyre-ignore[16]
         
-        # Generate outline
-        print("📋 Generating outline...")
-        outline = await self.generate_outline(config)
-        print(f"   ✅ {len(outline)} chapters planned")
-        
-        # Generate cover
-        print("🎨 Generating cover...")
-        cover_path = book_dir / "cover.png"
+        print("🎨 Requesting Pollinations.ai cover...")
+        await self.report_progress("cover", 20)
         try:
-            await self.cover_gen.generate(config.title, config.genre, cover_path)
+            await CoverGenerator.generate(current_config.title, current_config.genre, book_dir / "cover.png")  # pyre-ignore[16]
+            print("   ✅ Cover downloaded")
         except Exception as e:
-            print(f"   ⚠️ Cover generation failed: {e}")
-        
-        # Generate chapters
+            print(f"   ⚠️ Cover fallback: {e}")
+
         chapters = []
         total_words = 0
         previous_summary = ""
-        
+
+        # We execute chapters sequentially to maintain storyline continuity via `previous_summary`
+        # and to manage rate limits more smoothly.
         for i, chapter_title in enumerate(outline):
-            print(f"✍️  Writing Chapter {i+1}/{len(outline)}: {chapter_title}...")
+            progress_base = 25
+            progress_step = 70 / len(outline)
+            current_progress = int(progress_base + (i * progress_step))
             
-            chapter = await self.generate_chapter(
-                config, i+1, chapter_title, outline, previous_summary
-            )
+            await self.report_progress("writing", current_progress, chapter=i+1, text=f"Starting: {chapter_title}", extra_data={"word_count": total_words})
+            print(f"✍️  Generating Ch {i+1}/{len(outline)}: {chapter_title[:40]}...")  # pyre-ignore[16]
+            
+            chapter = await self.generate_chapter(current_config, i+1, chapter_title, outline, previous_summary)  # pyre-ignore[16]
+            
+            # Step 2: Generate Chapter Illustration
+            illustration_path = book_dir / f"chapter_{i+1}.png"
+            art_prompt = f"Illustration for chapter: {chapter_title}"
+            await self.illustrator.generate_chapter_art(art_prompt, illustration_path)
+            
             chapters.append(chapter)
             total_words += chapter.word_count
+            print(f"   ✅ Authored {chapter.word_count:,} words")
             
-            # Update summary for context
-            summary_prompt = f"Summarize this chapter in 2-3 sentences:\n{chapter.content[:2000]}"
-            previous_summary += f"\nChapter {i+1}: " + await self.writer.generate(
-                summary_prompt, max_tokens=100
-            )
+            # Update progress with actual word count after chapter
+            await self.report_progress("writing", current_progress, chapter=i+1, text=f"Finished: {chapter_title}", extra_data={"word_count": total_words})
             
-            print(f"   ✅ {chapter.word_count:,} words")
-            
-            # Rate limiting - Groq has limits
-            await asyncio.sleep(2)
+            # Generate a fast summary for context window passing bounds
+            summary_prompt = f"Summarize this chapter chunk in 1-2 concise sentences:\n{chapter.content[:2000]}"
+            summary = await self.writer.generate(summary_prompt, max_tokens=100)
+            previous_summary += f"\nCh {i+1}: " + summary
+            previous_summary = previous_summary.strip()
+
+        await self.report_progress("assembling", 95)
+        print("\n📚 Executing content assembly pipeline...")
+        await self._write_markdown_and_txt(current_config, chapters, book_dir)
         
-        # Compile book
-        print("\n📚 Compiling book...")
+        print("🗂️ Generating final staging metadata...")
+        meta_gen = MetadataGenerator(book_dir)
+        # Using industry heuristic 275 words per KDP paperback page
+        estimated_pages = max(1, total_words // 275)
         
-        # Save as Markdown
-        md_path = book_dir / "book.md"
-        with open(md_path, "w", encoding="utf-8") as f:
-            f.write(f"# {config.title}\n\n")
-            f.write(f"*By {config.author_name}*\n\n")
-            f.write(f"---\n\n")
-            f.write(f"## Description\n\n{config.description}\n\n")
-            f.write(f"---\n\n")
-            
-            for chapter in chapters:
-                f.write(f"## Chapter {chapter.number}: {chapter.title}\n\n")
-                f.write(f"{chapter.content}\n\n")
-                f.write(f"---\n\n")
+        kdp_details = meta_gen.generate_kdp_details(current_config.__dict__, total_words, estimated_pages)
+        meta_gen.save_metadata_json(kdp_details)
+
+        # NEW: Integrate KDP Formatting and Marketing Kit into core pipeline
+        print("▶ Formatting KDP compliant DOCX...")
+        await self.report_progress("formatting", 97, text="Polishing DOCX layout...")
+        formatter = KDPFormatter(book_dir)
+        formatter.format_for_kdp()
         
-        # Save as plain text (for KDP)
-        txt_path = book_dir / "book.txt"
-        with open(txt_path, "w", encoding="utf-8") as f:
-            f.write(f"{config.title}\n")
-            f.write(f"By {config.author_name}\n\n")
-            
-            for chapter in chapters:
-                f.write(f"\n{'='*40}\n")
-                f.write(f"CHAPTER {chapter.number}: {chapter.title}\n")
-                f.write(f"{'='*40}\n\n")
-                f.write(f"{chapter.content}\n")
+        print("▶ Generating final upload checklist...")
+        meta_gen.create_upload_checklist(formatter.metadata)
         
-        # Save metadata
-        metadata = {
-            "title": config.title,
-            "author": config.author_name,
-            "genre": config.genre,
-            "description": config.description,
-            "keywords": config.keywords,
-            "total_words": total_words,
-            "chapters": len(chapters),
-            "generated_at": datetime.now().isoformat(),
-        }
+        print("▶ Constructing Marketing Kit...")
+        await self.report_progress("marketing", 99, text="Generating sales copies...")
+        kit_gen = MarketingKitGenerator(self.writer)
+        await kit_gen.generate_kit(book_dir, formatter.metadata)
         
-        meta_path = book_dir / "metadata.json"
-        with open(meta_path, "w", encoding="utf-8") as f:
-            json.dump(metadata, f, indent=2)
-        
-        print(f"\n{'='*60}")
-        print(f"✅ BOOK COMPLETE!")
-        print(f"📖 Title: {config.title}")
-        print(f"📊 Total words: {total_words:,}")
-        print(f"📁 Location: {book_dir}")
-        print(f"{'='*60}")
-        
+        print(f"\n✅ Build SUCCESS for: {current_config.title}")
+        print(f"📂 Location: {book_dir.absolute()}")
+        await self.report_progress("complete", 100)
         return book_dir
 
-
 async def main():
-    """Main entry point"""
-    
-    print("""
-    ╔══════════════════════════════════════════════════════════╗
-    ║                 📚 AI BOOK FACTORY 📚                    ║
-    ║                                                          ║
-    ║  Automatski generiše knjige za Amazon KDP               ║
-    ║  Besplatno: Groq API + Pollinations.ai                  ║
-    ╚══════════════════════════════════════════════════════════╝
-    """)
-    
-    api_key = os.getenv("GROQ_API_KEY")
-    if not api_key:
-        print("❌ GROQ_API_KEY not set!")
-        print("   Get free key at: https://console.groq.com")
-        print("   Then: export GROQ_API_KEY=your_key_here")
-        return
-    
-    factory = BookFactory(api_key)
-    
-    # Generate a book
+    print("▶ Starting AI Book Factory...")
+    factory = BookFactory()
+    # In CLI mode, we already integrated the formatting into generate_book
     book_dir = await factory.generate_book()
-    
-    print(f"\n📚 Your book is ready at: {book_dir}")
-    print("\n📋 Next steps:")
-    print("   1. Review and edit the content")
-    print("   2. Format for KDP (use book.txt)")
-    print("   3. Upload cover.png to KDP")
-    print("   4. Publish and profit! 💰")
-
+    print(f"▶ Full asset bundle ready at: {book_dir}")
 
 if __name__ == "__main__":
     asyncio.run(main())

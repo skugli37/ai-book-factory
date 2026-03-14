@@ -1,0 +1,11 @@
+venv/
+__pycache__/
+*.db
+books/
+config.py
+.env
+.ipynb_checkpoints/
+*.docx
+*.webp
+*.png
+!web/frontend/assets/*.png

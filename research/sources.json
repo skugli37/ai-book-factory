@@ -1,0 +1,18 @@
+{
+  "crypto": [
+    "https://en.wikipedia.org/wiki/Cryptocurrency",
+    "https://www.coindesk.com/category/tech"
+  ],
+  "ai": [
+    "https://en.wikipedia.org/wiki/Artificial_intelligence",
+    "https://techcrunch.com/category/artificial-intelligence"
+  ],
+  "health": [
+    "https://en.wikipedia.org/wiki/Health_care",
+    "https://www.medicalnewstoday.com"
+  ],
+  "business": [
+    "https://en.wikipedia.org/wiki/Business",
+    "https://www.entrepreneur.com/topic/small-business"
+  ]
+}
